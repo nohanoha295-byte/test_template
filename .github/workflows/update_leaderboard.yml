@@ -1,0 +1,64 @@
+name: Update Leaderboard
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  update:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install deps
+        run: |
+          pip install pandas scikit-learn pyyaml
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          META=$(ls submissions/inbox/*/*/metadata.json | head -n 1)
+          TEAM=$(jq -r .team $META)
+          MODEL=$(jq -r .model $META)
+          NOTES=$(jq -r .notes $META)
+          echo "team=$TEAM" >> $GITHUB_OUTPUT
+          echo "model=$MODEL" >> $GITHUB_OUTPUT
+          echo "notes=$NOTES" >> $GITHUB_OUTPUT
+
+      - name: Restore private labels
+        run: |
+          mkdir -p data/private
+          echo "${{ secrets.TEST_LABELS_CSV }}" > data/private/test_labels.csv
+
+      - name: Score submission
+        id: score
+        run: |
+          PRED=$(ls submissions/inbox/*/*/predictions.csv | head -n 1)
+          SCORE=$(python competition/evaluate.py \
+            "$PRED" data/private/test_labels.csv | sed 's/SCORE=//')
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+
+      - name: Append to leaderboard
+        run: |
+          python competition/append_to_leaderboard.py \
+            "${{ steps.meta.outputs.team }}" \
+            "${{ steps.meta.outputs.model }}" \
+            "${{ steps.score.outputs.score }}" \
+            "${{ steps.meta.outputs.notes }}"
+
+      - name: Commit leaderboard
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add leaderboard/leaderboard.csv
+          git commit -m "Add leaderboard entry"
+          git push

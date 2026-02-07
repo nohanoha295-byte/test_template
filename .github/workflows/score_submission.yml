@@ -1,1 +1,59 @@
-# GitHub Actions scoring workflow placeholder
+name: Score Submission
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install deps
+        run: |
+          pip install pandas scikit-learn pyyaml
+
+      - name: Locate submission
+        id: locate
+        run: |
+          SUB=$(ls submissions/inbox/*/*/predictions.csv | head -n 1)
+          echo "pred_path=$SUB" >> $GITHUB_OUTPUT
+
+      - name: Validate submission
+        run: |
+          python competition/validate_submission.py \
+            "${{ steps.locate.outputs.pred_path }}" \
+            data/public/test_nodes.csv
+
+      - name: Restore private labels
+        run: |
+          mkdir -p data/private
+          echo "${{ secrets.TEST_LABELS_CSV }}" > data/private/test_labels.csv
+
+      - name: Score submission
+        id: score
+        run: |
+          SCORE=$(python competition/evaluate.py \
+            "${{ steps.locate.outputs.pred_path }}" \
+            data/private/test_labels.csv | sed 's/SCORE=//')
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+
+      - name: Comment score on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `✅ **Submission scored successfully**\n\n**AUC:** \`${{ steps.score.outputs.score }}\`\n\n_(Leaderboard updates only after merge)_`
+            })
